@@ -1,0 +1,8 @@
+.palworld-relay/local.json
+.palworld-relay/backups/
+.palworld-relay/logs/
+backup/
+*.tmp
+*.swap.tmp
+__pycache__/
+*.pyc
