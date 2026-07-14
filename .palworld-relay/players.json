@@ -1,10 +1,10 @@
-{
-  "Shine": {
-    "characterName": "Shine",
-    "clientGuid": null
-  },
-  "Hazeki": {
-    "characterName": "Hazeki",
-    "clientGuid": "7A63391C000000000000000000000000"
-  }
+﻿{
+    "Shine":  {
+                  "characterName":  "Shine",
+                  "clientGuid":  "B876A457000000000000000000000000"
+              },
+    "Hazeki":  {
+                   "characterName":  "Hazeki",
+                   "clientGuid":  "7A63391C000000000000000000000000"
+               }
 }
