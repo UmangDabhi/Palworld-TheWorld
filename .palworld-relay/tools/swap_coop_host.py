@@ -446,7 +446,11 @@ def main() -> int:
     swap_parser.add_argument("world", type=Path)
     swap_parser.add_argument("current_client_guid")
     swap_parser.add_argument("incoming_client_guid")
-    args = parser.parse_args()
+    arguments = sys.argv[1:]
+    # Older Pull-And-Swap.ps1 versions call the tool without the "swap" verb.
+    if len(arguments) == 3 and arguments[0] not in {"validate", "swap"}:
+        arguments.insert(0, "swap")
+    args = parser.parse_args(arguments)
     try:
         if args.command == "validate":
             host, client = validate_world(args.world, args.host_client_guid, args.client_guid)
