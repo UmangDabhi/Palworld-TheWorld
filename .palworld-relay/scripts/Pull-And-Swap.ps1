@@ -2,77 +2,98 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Common.ps1')
 Start-RelayLog 'pull-and-swap'
 
+$prePullBackup = $null
+$stage = $null
 try {
     Write-Step 'Preflight safety checks'
     Assert-PalworldStopped
     Assert-ValidWorld
     Ensure-GitRepo
+    Ensure-Origin
     $localPlayer = Ensure-LocalPlayer
+    Protect-LocalData
 
-    if (Test-Path -LiteralPath (Join-Path $script:WorldRoot '.git') -PathType Container) {
-        Assert-CleanForPull
-        $remotes = @(& git -C $script:WorldRoot remote)
-        if ($remotes -contains 'origin') {
-            Ensure-Origin
-            Write-Step 'Pulling latest world from GitHub'
-            Invoke-Git pull --ff-only origin main
-        }
+    $prePullBackup = New-SafetyBackup 'before-pull'
+    Write-Step 'Checking GitHub for the latest world'
+    try {
+        Invoke-Git fetch --prune origin main
+    } catch {
+        throw "Could not fetch the latest world from GitHub. The live saves were not changed. Check the internet connection and GitHub access, then try again.`n$($_.Exception.Message)"
     }
 
-    Write-Step 'Checking character ownership'
-    $state = Get-State
-    $players = Get-Players
-    if ($state.currentHost -eq $localPlayer) {
-        Write-Host "Ready. This world is already prepared for $localPlayer as host." -ForegroundColor Green
-        return
+    $delta = Get-BranchDelta
+    if ($delta.LocalOnly -gt 0 -and $delta.RemoteOnly -gt 0) {
+        throw "Local and GitHub histories have diverged ($($delta.LocalOnly) local commit(s), $($delta.RemoteOnly) GitHub commit(s)). A force pull would destroy someone's progress, so the relay stopped. Push/resolve the local commits first; backup: $prePullBackup"
+    }
+    if ($delta.LocalOnly -gt 0) {
+        throw "This PC has $($delta.LocalOnly) local commit(s) that GitHub does not have. This commonly means an earlier push failed. Do not pull over it. Run 2-PUSH-WORLD.bat (it will push the existing commit) or run: git push -u origin main"
     }
 
-    $oldHost = [string]$state.currentHost
-    $oldClientGuid = [string]$players.$oldHost.clientGuid
-    $incomingGuid = [string]$players.$localPlayer.clientGuid
-    if ([string]::IsNullOrWhiteSpace($incomingGuid)) {
-        throw "$localPlayer has no client GUID yet. That player must join once as a client before they can become host."
+    $changes = @(Get-GitStatusLines)
+    if ($changes.Count -gt 0) {
+        Write-Step 'Local changes would block the pull'
+        Write-Host 'These local files contain changes that are not on GitHub:' -ForegroundColor Yellow
+        $changes | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+        Write-Host ''
+        Write-Host 'Before continuing, ask the other player: Did you host/play, and did you push the progress we should keep?' -ForegroundColor Yellow
+        Write-Host "If you continue, this PC's current files stay in backup $prePullBackup and in a named Git stash. GitHub becomes the active world; nothing is force-reset." -ForegroundColor Yellow
+        if (-not (Read-YesNo 'Continue with the GitHub world and keep these local changes in backup/stash?')) {
+            throw "Pull cancelled by user. No GitHub world was installed. Local backup: $prePullBackup"
+        }
+        New-RelayStash
     }
 
-    if ([string]::IsNullOrWhiteSpace($oldClientGuid)) {
-        $known = @($script:HostGuid)
-        foreach ($property in $players.PSObject.Properties) {
-            if ($property.Value.clientGuid) { $known += [string]$property.Value.clientGuid }
-        }
-        $unknown = @(Get-PlayerSaveGuids | Where-Object { $_ -notin $known })
-        if ($unknown.Count -ne 1) {
-            Write-Host ''
-            Write-Host 'ONE-TIME BOOTSTRAP NEEDED' -ForegroundColor Yellow
-            Write-Host "We can make $localPlayer host, but first Palworld must create $oldHost's normal client GUID."
-            Write-Host ''
-            Write-Host "1. Open this world on this PC. It may temporarily show $oldHost as host."
-            Write-Host "2. Share the join code with $oldHost."
-            Write-Host "3. $oldHost joins once and creates/enters the temporary client slot."
-            Write-Host '4. Both players close Palworld completely.'
-            Write-Host '5. Run 1-PULL-AND-SWAP.bat again. Then the real characters will rotate correctly.'
-            exit 2
-        }
-        $players.$oldHost.clientGuid = $unknown[0]
-        $oldClientGuid = $unknown[0]
-        Save-Json $script:PlayersPath $players
-        Invoke-Git add -- .palworld-relay/players.json
-        Invoke-Git commit -m "config: record $oldHost client GUID"
-        $remotes = @(& git -C $script:WorldRoot remote)
-        if ($remotes -contains 'origin') {
-            Invoke-Git push origin main
-        }
+    Write-Step 'Building and validating the GitHub world in isolation'
+    $stage = New-RemoteSnapshot (Join-Path $prePullBackup 'LocalData.sav')
+    $stageStatePath = Join-Path $stage '.palworld-relay\state.json'
+    $candidateState = Get-Json $stageStatePath
+    $remoteHost = [string]$candidateState.currentHost
+    if ($remoteHost -notin @('Shine', 'Hazeki')) {
+        throw "GitHub state.json has an invalid currentHost: $remoteHost"
+    }
+    Invoke-WorldValidation $remoteHost $stage
+
+    if ($remoteHost -ne $localPlayer) {
+        Write-Step "Swapping the staged world from $remoteHost to $localPlayer"
+        Invoke-CharacterSwap $remoteHost $localPlayer $stage
+        $candidateState.currentHost = $localPlayer
+        $candidateState.updatedUtc = [DateTime]::UtcNow.ToString('o')
+        Invoke-WorldValidation $localPlayer $stage
+    } else {
+        Write-Host "GitHub is already prepared for $localPlayer as host." -ForegroundColor Green
     }
 
-    Write-Step "Swapping host character from $oldHost to $localPlayer"
-    New-SafetyBackup 'before-swap' | Out-Null
-    Invoke-CharacterSwap $oldClientGuid $incomingGuid
-    $state.currentHost = $localPlayer
-    Save-State $state
+    if ($delta.RemoteOnly -gt 0) {
+        Write-Step "Fast-forwarding Git to $($delta.RemoteOnly) new GitHub commit(s)"
+        try {
+            Invoke-Git merge --ff-only origin/main
+        } catch {
+            throw "Git could not fast-forward to origin/main. No force pull was attempted. The validated candidate remains at $stage and the original world backup is $prePullBackup.`n$($_.Exception.Message)"
+        }
+    } else {
+        Write-Host 'Git is already at the latest GitHub commit.' -ForegroundColor DarkGray
+    }
 
-    Write-Host "Ready. $localPlayer is now the host character for this PC." -ForegroundColor Green
-    Write-Host 'Open Palworld normally and load the world.' -ForegroundColor Green
+    Write-Step "Installing the validated $localPlayer-host world"
+    Install-WorldSnapshot $stage $candidateState 'install-validated-pull' | Out-Null
+    Protect-LocalData
+    Invoke-WorldValidation $localPlayer $script:WorldRoot
+    Move-StagingToBackup $stage 'validated-pull-candidate'
+    $stage = $null
+
+    Write-Host ''
+    Write-Host "READY: $localPlayer is the host. Character, inventory, party, Palbox, Pal ownership, guild links, and player-file layout all passed validation." -ForegroundColor Green
+    Write-Host 'You may now open Palworld and load this world.' -ForegroundColor Green
+    if ($script:LastStashName) {
+        Write-Host "The earlier local changes remain safely stored as: $script:LastStashName" -ForegroundColor Yellow
+    }
 } catch {
-    Write-Error $_
+    Write-Host ''
+    Write-Host 'PULL/SWAP STOPPED - DO NOT OPEN THIS WORLD UNTIL THE MESSAGE BELOW IS RESOLVED' -ForegroundColor Red
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    if ($prePullBackup) { Write-Host "Pre-pull restore path: $prePullBackup" -ForegroundColor Yellow }
+    if ($script:LastStashName) { Write-Host "Git stash kept: $script:LastStashName" -ForegroundColor Yellow }
+    if ($stage -and (Test-Path -LiteralPath $stage)) { Write-Host "Staged candidate kept for inspection: $stage" -ForegroundColor Yellow }
     exit 1
 } finally {
     Stop-RelayLog

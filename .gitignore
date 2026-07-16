@@ -1,6 +1,7 @@
 .palworld-relay/local.json
 .palworld-relay/backups/
 .palworld-relay/logs/
+.palworld-relay/work/
 backup/
 *.tmp
 *.swap.tmp
