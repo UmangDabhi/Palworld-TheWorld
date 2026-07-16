@@ -4,6 +4,7 @@ Start-RelayLog 'pull-and-swap'
 
 $prePullBackup = $null
 $stage = $null
+$localDataHash = $null
 try {
     Write-Step 'Preflight safety checks'
     Assert-PalworldStopped
@@ -14,6 +15,7 @@ try {
     Protect-LocalData
 
     $prePullBackup = New-SafetyBackup 'before-pull'
+    $localDataHash = (Get-FileHash -LiteralPath (Join-Path $prePullBackup 'LocalData.sav') -Algorithm SHA256).Hash
     Write-Step 'Checking GitHub for the latest world'
     try {
         Invoke-Git fetch --prune origin main
@@ -63,6 +65,11 @@ try {
         Write-Host "GitHub is already prepared for $localPlayer as host." -ForegroundColor Green
     }
 
+    $stagedLocalDataHash = (Get-FileHash -LiteralPath (Join-Path $stage 'LocalData.sav') -Algorithm SHA256).Hash
+    if ($stagedLocalDataHash -ne $localDataHash) {
+        throw "The staged swap changed LocalData.sav, which stores this PC's map/fog progress. The live world was not changed. Original map backup: $prePullBackup"
+    }
+
     if ($delta.RemoteOnly -gt 0) {
         Write-Step "Fast-forwarding Git to $($delta.RemoteOnly) new GitHub commit(s)"
         try {
@@ -77,12 +84,18 @@ try {
     Write-Step "Installing the validated $localPlayer-host world"
     Install-WorldSnapshot $stage $candidateState 'install-validated-pull' | Out-Null
     Protect-LocalData
+    $installedLocalData = Join-Path $script:WorldRoot 'LocalData.sav'
+    $installedLocalDataHash = (Get-FileHash -LiteralPath $installedLocalData -Algorithm SHA256).Hash
+    if ($installedLocalDataHash -ne $localDataHash) {
+        Copy-Item -LiteralPath (Join-Path $prePullBackup 'LocalData.sav') -Destination $installedLocalData -Force
+        throw "LocalData.sav changed during installation, so the relay restored this PC's original map/fog data from $prePullBackup. The world must be inspected before opening Palworld."
+    }
     Invoke-WorldValidation $localPlayer $script:WorldRoot
     Move-StagingToBackup $stage 'validated-pull-candidate'
     $stage = $null
 
     Write-Host ''
-    Write-Host "READY: $localPlayer is the host. Character, inventory, party, Palbox, Pal ownership, guild links, and player-file layout all passed validation." -ForegroundColor Green
+    Write-Host "READY: $localPlayer is the host. Character, all six inventory/equipment containers, dynamic items, party, Palbox, Pal ownership, guild links, player-file layout, and this PC's map data all passed validation." -ForegroundColor Green
     Write-Host 'You may now open Palworld and load this world.' -ForegroundColor Green
     if ($script:LastStashName) {
         Write-Host "The earlier local changes remain safely stored as: $script:LastStashName" -ForegroundColor Yellow

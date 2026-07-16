@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
+import json
 import os
 import re
 import sys
@@ -33,6 +35,8 @@ class PlayerSummary:
     instance: str
     item_slots: int
     pals: int
+    item_fingerprint: str
+    pal_instances: frozenset[str]
 
 
 def normalize_guid(value: str) -> str:
@@ -121,6 +125,7 @@ def player_container_ids(document: dict) -> tuple[dict[str, str], dict[str, str]
             "key-items": container_id(inventory["EssentialContainerId"]),
             "food-equipment": container_id(inventory["FoodEquipContainerId"]),
             "weapon-loadout": container_id(inventory["WeaponLoadOutContainerId"]),
+            "armor-equipment": container_id(inventory["PlayerEquipArmorContainerId"]),
         }
         character_ids = {
             "party": container_id(data["OtomoCharacterContainerId"]),
@@ -182,6 +187,73 @@ def occupied_slots(container: dict) -> list:
         return container["value"]["Slots"]["value"]["values"]
     except KeyError as exc:
         raise SwapError(f"Malformed container in Level.sav; missing {exc}") from exc
+
+
+def occupied_item_slots(container: dict, label: str) -> list[dict]:
+    result = []
+    for slot in occupied_slots(container):
+        raw = slot.get("RawData", {}).get("value")
+        if not raw:
+            continue
+        item = raw.get("item", {})
+        static_id = item.get("static_id")
+        count = raw.get("count")
+        if not static_id or not isinstance(count, int) or count <= 0:
+            raise SwapError(
+                f"{label} has a malformed occupied item slot "
+                f"(static_id={static_id!r}, count={count!r})"
+            )
+        result.append(raw)
+    return result
+
+
+def dynamic_item_entries(level: dict) -> list:
+    try:
+        entries = world_data(level)["DynamicItemSaveData"]["value"]["values"]
+    except KeyError as exc:
+        raise SwapError(f"Level.sav is missing DynamicItemSaveData: {exc}") from exc
+    if not isinstance(entries, list):
+        raise SwapError("Level.sav DynamicItemSaveData is not a list")
+    return entries
+
+
+def dynamic_item_id(entry: dict) -> str:
+    try:
+        return str(entry["RawData"]["value"]["id"]["local_id_in_created_world"]).lower()
+    except KeyError as exc:
+        raise SwapError(f"Malformed dynamic item record; missing {exc}") from exc
+
+
+def dynamic_item_static_id(entry: dict) -> str:
+    try:
+        return str(entry["RawData"]["value"]["id"]["static_id"])
+    except KeyError as exc:
+        raise SwapError(f"Malformed dynamic item record; missing {exc}") from exc
+
+
+def item_fingerprint(
+    item_ids: dict[str, str],
+    item_containers: dict[str, dict],
+    dynamic_items: dict[str, dict],
+    referenced_dynamic_ids: set[str],
+) -> str:
+    payload = {
+        "containers": {
+            name: item_containers[container_id]
+            for name, container_id in sorted(item_ids.items())
+        },
+        "dynamic_items": {
+            item_id: dynamic_items[item_id]
+            for item_id in sorted(referenced_dynamic_ids)
+        },
+    }
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def validate_guild(level: dict, expected_guid: str, instance: str, label: str) -> None:
@@ -251,6 +323,9 @@ def validate_player_links(level: dict, document: dict, expected_guid: str, label
     item_containers = index_unique(
         keyed_entries(level, "ItemContainerSaveData"), entry_id, "item container"
     )
+    dynamic_items = index_unique(
+        dynamic_item_entries(level), dynamic_item_id, "dynamic item"
+    )
     character_containers = index_unique(
         keyed_entries(level, "CharacterContainerSaveData"), entry_id, "character container"
     )
@@ -263,8 +338,33 @@ def validate_player_links(level: dict, document: dict, expected_guid: str, label
             "Opening this world could show an empty inventory or Palbox."
         )
 
-    item_slots = sum(len(occupied_slots(item_containers[value])) for value in item_ids.values())
-    pal_count = 0
+    item_slots = 0
+    zero_id = "00000000-0000-0000-0000-000000000000"
+    referenced_dynamic_ids: set[str] = set()
+    for container_name, container_value in item_ids.items():
+        slots = occupied_item_slots(
+            item_containers[container_value], f"{label} {container_name} container"
+        )
+        item_slots += len(slots)
+        for slot in slots:
+            item = slot["item"]
+            dynamic_id = str(item["dynamic_id"]["local_id_in_created_world"]).lower()
+            if dynamic_id == zero_id:
+                continue
+            referenced_dynamic_ids.add(dynamic_id)
+            dynamic = dynamic_items.get(dynamic_id)
+            if dynamic is None:
+                raise SwapError(
+                    f"{label} {container_name} item {item['static_id']} points to missing "
+                    f"dynamic item {dynamic_id}. Opening this world could reset the inventory."
+                )
+            dynamic_static_id = dynamic_item_static_id(dynamic)
+            if dynamic_static_id != item["static_id"]:
+                raise SwapError(
+                    f"{label} {container_name} item {dynamic_id} has conflicting static IDs "
+                    f"({item['static_id']} versus {dynamic_static_id})"
+                )
+    pal_instances: set[str] = set()
     for container_name, container_value in character_ids.items():
         for slot in occupied_slots(character_containers[container_value]):
             try:
@@ -288,10 +388,19 @@ def validate_player_links(level: dict, document: dict, expected_guid: str, label
                 raise SwapError(
                     f"{label} {container_name} Pal {pal_instance} has the wrong OwnerPlayerUId"
                 )
-            pal_count += 1
+            if pal_instance in pal_instances:
+                raise SwapError(f"{label} Pal {pal_instance} appears in more than one player container")
+            pal_instances.add(pal_instance)
 
     validate_guild(level, expected_guid, instance, label)
-    return PlayerSummary(expected_guid, instance, item_slots, pal_count)
+    return PlayerSummary(
+        expected_guid,
+        instance,
+        item_slots,
+        len(pal_instances),
+        item_fingerprint(item_ids, item_containers, dynamic_items, referenced_dynamic_ids),
+        frozenset(pal_instances),
+    )
 
 
 def validate_world(world: Path, host_client_guid: str, client_guid: str) -> tuple[PlayerSummary, PlayerSummary]:
@@ -427,11 +536,20 @@ def swap(world: Path, current_client_guid: str, incoming_client_guid: str) -> No
         raise SwapError("Outgoing host inventory/Pal counts changed during the swap")
     if before_client.item_slots != after_host.item_slots or before_client.pals != after_host.pals:
         raise SwapError("Incoming host inventory/Pal counts changed during the swap")
+    if before_host.item_fingerprint != after_client.item_fingerprint:
+        raise SwapError("Outgoing host inventory/equipment contents changed during the swap")
+    if before_client.item_fingerprint != after_host.item_fingerprint:
+        raise SwapError("Incoming host inventory/equipment contents changed during the swap")
+    if before_host.pal_instances != after_client.pal_instances:
+        raise SwapError("Outgoing host Pal identities changed during the swap")
+    if before_client.pal_instances != after_host.pal_instances:
+        raise SwapError("Incoming host Pal identities changed during the swap")
     print(
         f"SWAP_OK old_host={current_client_guid} new_host={incoming_client_guid} "
         f"guid_references={rewrites} "
         f"old_host_items={after_client.item_slots} old_host_pals={after_client.pals} "
-        f"new_host_items={after_host.item_slots} new_host_pals={after_host.pals}"
+        f"new_host_items={after_host.item_slots} new_host_pals={after_host.pals} "
+        "items_exact=true pals_exact=true"
     )
 
 

@@ -57,13 +57,19 @@ Safety and validation
 
 - Never run either BAT while Palworld is open.
 - LocalData.sav is machine-local. The relay marks it skip-worktree and never
-  stages it in a save commit.
+  stages it in a save commit. Pull carries the local copy through staging and
+  verifies its SHA-256 hash before and after installation; a mismatch stops the
+  relay and restores the pre-pull map/fog file.
 - Pull uses fetch plus fast-forward only. It never force-pulls or merges binary
   worlds. Diverged or unpushed commits stop with an explanation.
 - Push refuses when GitHub has newer commits.
 - Pull, swap, and push validate player files, internal player IDs, character
-  instances, inventory containers, party/Palbox containers, Pal ownership,
-  guild handles, and the exact two-player file layout.
+  instances, all six item containers (inventory, drop slot, key items, food,
+  weapon loadout, and armor/equipment), every referenced dynamic item record,
+  party/Palbox containers, Pal ownership, guild handles, and the exact
+  two-player file layout.
+- Swap compares exact inventory/equipment fingerprints and exact Pal instance
+  sets before and after rotation. Matching counts alone are not accepted.
 - Backups are in .palworld-relay\backups. Each new backup has a manifest with
   SHA-256 hashes and the Git commit ID.
 - Logs are in .palworld-relay\logs.
