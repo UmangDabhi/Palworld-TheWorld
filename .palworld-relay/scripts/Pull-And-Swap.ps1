@@ -95,7 +95,7 @@ try {
     $stage = $null
 
     Write-Host ''
-    Write-Host "READY: $localPlayer is the host. Character, all six inventory/equipment containers, dynamic items, party, Palbox, Pal ownership, guild links, player-file layout, and this PC's map data all passed validation." -ForegroundColor Green
+    Write-Host "READY: $localPlayer is the host. Character, all six inventory/equipment containers, dynamic items, party, Palbox, dimensional Pal storage sidecars, Pal ownership/provenance, guild links, player-file layout, and this PC's map data all passed validation." -ForegroundColor Green
     Write-Host 'You may now open Palworld and load this world.' -ForegroundColor Green
     if ($script:LastStashName) {
         Write-Host "The earlier local changes remain safely stored as: $script:LastStashName" -ForegroundColor Yellow

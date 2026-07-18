@@ -11,7 +11,7 @@ import os
 import re
 import sys
 from contextlib import redirect_stdout
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from palworld_save_tools.archive import UUID
@@ -37,6 +37,8 @@ class PlayerSummary:
     pals: int
     item_fingerprint: str
     pal_instances: frozenset[str]
+    dps_pals: int = 0
+    dps_fingerprint: str | None = None
 
 
 def normalize_guid(value: str) -> str:
@@ -44,6 +46,64 @@ def normalize_guid(value: str) -> str:
     if not GUID_RE.fullmatch(guid):
         raise SwapError(f"Expected a 32-character hexadecimal GUID, got {value!r}")
     return guid
+
+
+def normalize_identity_for_fingerprint(value, identity_roles: dict[str, str]):
+    if isinstance(value, dict):
+        return {
+            key: normalize_identity_for_fingerprint(child, identity_roles)
+            for key, child in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [normalize_identity_for_fingerprint(child, identity_roles) for child in value]
+    if isinstance(value, (str, UUID)):
+        try:
+            guid = normalize_guid(str(value))
+            if guid in identity_roles:
+                return f"<{identity_roles[guid]}>"
+        except SwapError:
+            pass
+        return str(value) if isinstance(value, UUID) else value
+    return value
+
+
+def document_fingerprint(document: dict, identity_roles: dict[str, str]) -> str:
+    canonical = json.dumps(
+        normalize_identity_for_fingerprint(document, identity_roles),
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def dps_summary(path: Path, player_guid: str, other_guid: str) -> tuple[int, str] | None:
+    if not path.is_file():
+        return None
+    document, _, _ = load_sav(path)
+    try:
+        entries = document["properties"]["SaveParameterArray"]["value"]["values"]
+    except KeyError as exc:
+        raise SwapError(f"Unexpected dimensional Pal storage structure in {path.name}: {exc}") from exc
+    if not isinstance(entries, list):
+        raise SwapError(f"Dimensional Pal storage in {path.name} is not an array")
+
+    active_instances: set[str] = set()
+    zero = dashed(ZERO_GUID)
+    for entry in entries:
+        try:
+            instance = str(entry["InstanceId"]["value"]["InstanceId"]["value"]).lower()
+        except KeyError as exc:
+            raise SwapError(f"Malformed dimensional Pal entry in {path.name}: {exc}") from exc
+        if instance == zero:
+            continue
+        if instance in active_instances:
+            raise SwapError(f"Duplicate dimensional Pal instance {instance} in {path.name}")
+        active_instances.add(instance)
+    return len(active_instances), document_fingerprint(
+        document,
+        {player_guid: "SELF", other_guid: "OTHER"},
+    )
 
 
 def dashed(guid: str) -> str:
@@ -373,20 +433,24 @@ def validate_player_links(level: dict, document: dict, expected_guid: str, label
                 pal_instance = str(raw["instance_id"]).lower()
             except KeyError as exc:
                 raise SwapError(f"{label} {container_name} has a malformed slot: {exc}") from exc
-            if owner_guid != expected_guid:
-                raise SwapError(
-                    f"{label} {container_name} slot {pal_instance} belongs to {owner_guid}, "
-                    f"expected {expected_guid}"
-                )
             pal_entries = character_by_instance.get(pal_instance, [])
-            if len(pal_entries) != 1 or entry_player_guid(pal_entries[0]) != expected_guid:
+            if len(pal_entries) != 1:
                 raise SwapError(
-                    f"{label} {container_name} Pal {pal_instance} is missing or linked to another player"
+                    f"{label} {container_name} Pal {pal_instance} does not have exactly one "
+                    "Level.sav character record"
+                )
+            provenance_guid = entry_player_guid(pal_entries[0])
+            if owner_guid != provenance_guid:
+                raise SwapError(
+                    f"{label} {container_name} Pal {pal_instance} has conflicting provenance "
+                    f"({owner_guid} in its slot versus {provenance_guid} in its character key)"
                 )
             owner = save_parameter(pal_entries[0]).get("OwnerPlayerUId", {}).get("value")
-            if owner is not None and normalize_guid(str(owner)) != expected_guid:
+            current_owner = normalize_guid(str(owner)) if owner is not None else owner_guid
+            if current_owner != expected_guid:
                 raise SwapError(
-                    f"{label} {container_name} Pal {pal_instance} has the wrong OwnerPlayerUId"
+                    f"{label} {container_name} Pal {pal_instance} is currently owned by "
+                    f"{current_owner}, expected {expected_guid}"
                 )
             if pal_instance in pal_instances:
                 raise SwapError(f"{label} Pal {pal_instance} appears in more than one player container")
@@ -414,14 +478,28 @@ def validate_world(world: Path, host_client_guid: str, client_guid: str) -> tupl
             raise SwapError(f"This is not the complete local co-op world; missing {relative}")
 
     players = world / "Players"
-    actual_files = {path.stem.upper() for path in players.glob("*.sav")}
+    normal_files: set[str] = set()
+    dps_files: set[str] = set()
+    unexpected_files: list[str] = []
+    for path in players.glob("*.sav"):
+        stem = path.stem.upper()
+        if GUID_RE.fullmatch(stem):
+            normal_files.add(stem)
+        elif stem.endswith("_DPS") and GUID_RE.fullmatch(stem[:-4]):
+            dps_files.add(stem[:-4])
+        else:
+            unexpected_files.append(path.name)
     expected_files = {HOST_GUID, client_guid}
-    if actual_files != expected_files:
-        missing = sorted(expected_files - actual_files)
-        unexpected = sorted(actual_files - expected_files)
+    unexpected_dps = sorted(dps_files - expected_files)
+    if normal_files != expected_files or unexpected_dps or unexpected_files:
+        missing = sorted(expected_files - normal_files)
+        unexpected = sorted(normal_files - expected_files)
         raise SwapError(
             "Player-file layout does not match the selected host. "
-            f"Missing={missing or 'none'}; unexpected={unexpected or 'none'}. "
+            f"Missing normal saves={missing or 'none'}; "
+            f"unexpected normal saves={unexpected or 'none'}; "
+            f"unexpected DPS sidecars={unexpected_dps or 'none'}; "
+            f"unknown saves={unexpected_files or 'none'}. "
             "No file was deleted; use the latest relay backup to investigate."
         )
 
@@ -430,6 +508,16 @@ def validate_world(world: Path, host_client_guid: str, client_guid: str) -> tupl
     client_doc, _, _ = load_sav(players / f"{client_guid}.sav")
     host = validate_player_links(level, host_doc, HOST_GUID, "Host")
     client = validate_player_links(level, client_doc, client_guid, "Client")
+    host_dps = dps_summary(
+        players / f"{HOST_GUID}_dps.sav", HOST_GUID, client_guid
+    )
+    client_dps = dps_summary(
+        players / f"{client_guid}_dps.sav", client_guid, HOST_GUID
+    )
+    if host_dps is not None:
+        host = replace(host, dps_pals=host_dps[0], dps_fingerprint=host_dps[1])
+    if client_dps is not None:
+        client = replace(client, dps_pals=client_dps[0], dps_fingerprint=client_dps[1])
 
     stale_host_entries = [
         entry
@@ -503,14 +591,23 @@ def swap(world: Path, current_client_guid: str, incoming_client_guid: str) -> No
     host_path = players / f"{HOST_GUID}.sav"
     incoming_path = players / f"{incoming_client_guid}.sav"
     outgoing_path = players / f"{current_client_guid}.sav"
+    host_dps_path = players / f"{HOST_GUID}_dps.sav"
+    incoming_dps_path = players / f"{incoming_client_guid}_dps.sav"
+    outgoing_dps_path = players / f"{current_client_guid}_dps.sav"
 
     level, level_type, level_zlib = load_sav(level_path)
     host_doc, host_type, host_zlib = load_sav(host_path)
     incoming_doc, incoming_type, incoming_zlib = load_sav(incoming_path)
+    host_dps = load_sav(host_dps_path) if host_dps_path.is_file() else None
+    incoming_dps = load_sav(incoming_dps_path) if incoming_dps_path.is_file() else None
     mapping = {HOST_GUID: current_client_guid, incoming_client_guid: HOST_GUID}
     rewrites = rewrite_guid_references(level, mapping)
     rewrites += rewrite_guid_references(host_doc, mapping)
     rewrites += rewrite_guid_references(incoming_doc, mapping)
+    if host_dps is not None:
+        rewrites += rewrite_guid_references(host_dps[0], mapping)
+    if incoming_dps is not None:
+        rewrites += rewrite_guid_references(incoming_dps[0], mapping)
 
     validate_player_links(level, host_doc, current_client_guid, "Outgoing host")
     validate_player_links(level, incoming_doc, HOST_GUID, "Incoming host")
@@ -518,19 +615,41 @@ def swap(world: Path, current_client_guid: str, incoming_client_guid: str) -> No
     level_tmp = world / ".Level.sav.swap.tmp"
     outgoing_tmp = players / ".outgoing-host.swap.tmp"
     incoming_tmp = players / ".incoming-host.swap.tmp"
+    outgoing_dps_tmp = players / ".outgoing-host-dps.swap.tmp"
+    incoming_dps_tmp = players / ".incoming-host-dps.swap.tmp"
     try:
         write_validated(level_tmp, encode_sav(level, level_type, level_zlib))
         write_validated(outgoing_tmp, encode_sav(host_doc, host_type, host_zlib))
         write_validated(incoming_tmp, encode_sav(incoming_doc, incoming_type, incoming_zlib))
+        if host_dps is not None:
+            write_validated(
+                outgoing_dps_tmp,
+                encode_sav(host_dps[0], host_dps[1], host_dps[2]),
+            )
+        if incoming_dps is not None:
+            write_validated(
+                incoming_dps_tmp,
+                encode_sav(incoming_dps[0], incoming_dps[1], incoming_dps[2]),
+            )
         os.replace(level_tmp, level_path)
         os.replace(outgoing_tmp, outgoing_path)
         os.replace(incoming_tmp, host_path)
         incoming_path.unlink()
+        if host_dps is not None:
+            os.replace(outgoing_dps_tmp, outgoing_dps_path)
+        if incoming_dps is not None:
+            os.replace(incoming_dps_tmp, host_dps_path)
+        elif host_dps_path.is_file():
+            host_dps_path.unlink()
+        if incoming_dps_path.is_file():
+            incoming_dps_path.unlink()
         after_host, after_client = validate_world(world, incoming_client_guid, current_client_guid)
     finally:
         level_tmp.unlink(missing_ok=True)
         outgoing_tmp.unlink(missing_ok=True)
         incoming_tmp.unlink(missing_ok=True)
+        outgoing_dps_tmp.unlink(missing_ok=True)
+        incoming_dps_tmp.unlink(missing_ok=True)
 
     if before_host.item_slots != after_client.item_slots or before_host.pals != after_client.pals:
         raise SwapError("Outgoing host inventory/Pal counts changed during the swap")
@@ -544,12 +663,23 @@ def swap(world: Path, current_client_guid: str, incoming_client_guid: str) -> No
         raise SwapError("Outgoing host Pal identities changed during the swap")
     if before_client.pal_instances != after_host.pal_instances:
         raise SwapError("Incoming host Pal identities changed during the swap")
+    if (
+        before_host.dps_pals != after_client.dps_pals
+        or before_host.dps_fingerprint != after_client.dps_fingerprint
+    ):
+        raise SwapError("Outgoing host dimensional Pal storage changed during the swap")
+    if (
+        before_client.dps_pals != after_host.dps_pals
+        or before_client.dps_fingerprint != after_host.dps_fingerprint
+    ):
+        raise SwapError("Incoming host dimensional Pal storage changed during the swap")
     print(
         f"SWAP_OK old_host={current_client_guid} new_host={incoming_client_guid} "
         f"guid_references={rewrites} "
         f"old_host_items={after_client.item_slots} old_host_pals={after_client.pals} "
         f"new_host_items={after_host.item_slots} new_host_pals={after_host.pals} "
-        "items_exact=true pals_exact=true"
+        f"old_host_dps_pals={after_client.dps_pals} new_host_dps_pals={after_host.dps_pals} "
+        "items_exact=true pals_exact=true dps_exact=true"
     )
 
 
@@ -574,7 +704,9 @@ def main() -> int:
             host, client = validate_world(args.world, args.host_client_guid, args.client_guid)
             print(
                 f"VALIDATION_OK host_items={host.item_slots} host_pals={host.pals} "
-                f"client_items={client.item_slots} client_pals={client.pals}"
+                f"host_dps_pals={host.dps_pals} "
+                f"client_items={client.item_slots} client_pals={client.pals} "
+                f"client_dps_pals={client.dps_pals}"
             )
         else:
             swap(args.world, args.current_client_guid, args.incoming_client_guid)

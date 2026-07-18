@@ -106,7 +106,7 @@ function Assert-ValidWorld {
         throw "Missing Players\$script:HostGuid.sav. The relay only supports a local co-op host world, not a dedicated server."
     }
     if (@(Get-PlayerSaveGuids).Count -ne 2) {
-        throw "Expected exactly two player saves for Shine and Hazeki. Found: $((Get-PlayerSaveGuids) -join ', ')"
+        throw "Expected exactly two ordinary player saves for Shine and Hazeki. Found: $((Get-PlayerSaveGuids) -join ', '). Files ending in _dps.sav are valid dimensional Pal storage sidecars and are checked separately."
     }
 }
 
@@ -159,7 +159,9 @@ function Get-OtherPlayer([string]$Player) {
 function Get-PlayerSaveGuids {
     $players = Join-Path $script:WorldRoot 'Players'
     if (-not (Test-Path -LiteralPath $players -PathType Container)) { return @() }
-    return @(Get-ChildItem -LiteralPath $players -Filter '*.sav' -File | ForEach-Object { $_.BaseName.ToUpperInvariant() })
+    return @(Get-ChildItem -LiteralPath $players -Filter '*.sav' -File |
+        Where-Object { $_.BaseName -match '^[0-9A-Fa-f]{32}$' } |
+        ForEach-Object { $_.BaseName.ToUpperInvariant() })
 }
 
 function Protect-LocalData {

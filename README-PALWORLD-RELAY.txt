@@ -70,6 +70,13 @@ Safety and validation
   two-player file layout.
 - Swap compares exact inventory/equipment fingerprints and exact Pal instance
   sets before and after rotation. Matching counts alone are not accepted.
+- Files named Players\<player-guid>_dps.sav are dimensional Pal storage
+  sidecars, not extra players. They are backed up, committed, validated, and
+  rotated with their owner; exact sidecar fingerprints must survive the swap.
+- Pals acquired or transferred during local co-op can retain the session host
+  UID as provenance. Current ownership is validated from OwnerPlayerUId and the
+  player's party/Palbox placement, while slot/key provenance must remain
+  internally consistent.
 - Backups are in .palworld-relay\backups. Each new backup has a manifest with
   SHA-256 hashes and the Git commit ID.
 - Logs are in .palworld-relay\logs.
