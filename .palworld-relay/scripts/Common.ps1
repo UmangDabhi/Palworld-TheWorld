@@ -105,8 +105,12 @@ function Assert-ValidWorld {
     if (-not (Test-Path -LiteralPath (Join-Path $script:WorldRoot "Players\$script:HostGuid.sav"))) {
         throw "Missing Players\$script:HostGuid.sav. The relay only supports a local co-op host world, not a dedicated server."
     }
-    if (@(Get-PlayerSaveGuids).Count -ne 2) {
-        throw "Expected exactly two ordinary player saves for Shine and Hazeki. Found: $((Get-PlayerSaveGuids) -join ', '). Files ending in _dps.sav are valid dimensional Pal storage sidecars and are checked separately."
+    $ordinaryPlayers = @(Get-PlayerSaveGuids)
+    if ($ordinaryPlayers.Count -lt 2 -or $ordinaryPlayers.Count -gt 3) {
+        throw "Expected two ordinary player saves, or one provably stale pre-swap alias. Found: $($ordinaryPlayers -join ', '). Files ending in _dps.sav are valid dimensional Pal storage sidecars and are checked separately."
+    }
+    if ($ordinaryPlayers.Count -eq 3) {
+        Write-Host 'Found three ordinary player saves. The relay will continue only if the extra file is a provably stale alias of the host, and it will preserve that file inside the new safety backup.' -ForegroundColor Yellow
     }
 }
 
@@ -304,6 +308,11 @@ function Invoke-CharacterSwap([string]$CurrentHost, [string]$IncomingHost, [stri
     $current = Get-HostMapping $CurrentHost
     $incoming = Get-HostMapping $IncomingHost
     Invoke-SaveTool swap $Root $current.HostClientGuid $incoming.HostClientGuid
+}
+
+function Invoke-LayoutNormalization([string]$HostPlayer, [string]$Backup) {
+    $mapping = Get-HostMapping $HostPlayer
+    Invoke-SaveTool normalize-layout $script:WorldRoot $mapping.HostClientGuid $mapping.ClientGuid $Backup
 }
 
 function Install-WorldSnapshot([string]$Source, $State, [string]$Label) {

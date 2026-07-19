@@ -1,14 +1,6 @@
 @echo off
-if /I not "%~1"=="--relay-temp" (
-  setlocal EnableDelayedExpansion
-  set "RELAY_TEMP=%TEMP%\palworld-relay-pull-%RANDOM%-%RANDOM%.bat"
-  copy /y "%~f0" "!RELAY_TEMP!" >nul
-  call "!RELAY_TEMP!" --relay-temp "%~dp0"
-  set "RELAY_EXIT=!ERRORLEVEL!"
-  del /q "!RELAY_TEMP!" >nul 2>&1
-  exit /b !RELAY_EXIT!
-)
 setlocal EnableDelayedExpansion
+if /I not "%~1"=="--relay-temp" (set "RELAY_TEMP=%TEMP%\palworld-relay-pull-%RANDOM%-%RANDOM%.bat"&copy /y "%~f0" "!RELAY_TEMP!" >nul&call "!RELAY_TEMP!" --relay-temp "%~dp0"&set "RELAY_EXIT=!ERRORLEVEL!"&del /q "!RELAY_TEMP!" >nul 2>&1&exit /b !RELAY_EXIT!)
 set "WORLD_ROOT=%~2"
 cd /d "%WORLD_ROOT%"
 set "RELAY_SCRIPT=%WORLD_ROOT%.palworld-relay\scripts\Pull-And-Swap.ps1"

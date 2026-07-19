@@ -27,6 +27,15 @@ When Hazeki hosts, the player files must be:
 - 00000000000000000000000000000001.sav = Hazeki
 - B876A457000000000000000000000000.sav = Shine
 
+Agreed session policy:
+- When Shine hosts, Hazeki may join; Hazeki's joined-session progress updates
+  7A63391C000000000000000000000000.sav.
+- When Hazeki hosts, Shine does not join; Shine remains preserved in
+  B876A457000000000000000000000000.sav.
+- A leftover 7A...sav while Hazeki is host is accepted only when it is proven
+  to be the same character instance as the host save. Before push, the relay
+  moves that stale alias into the new safety backup instead of deleting it.
+
 Normal use
 ----------
 

@@ -17,9 +17,12 @@ try {
         throw "This PC is configured for $localPlayer, but state.json says the world is prepared for $($state.currentHost). Run 1-PULL-AND-SWAP.bat first. The relay will not relabel or push an unverified host world."
     }
 
+    $backup = New-SafetyBackup 'before-push'
+    Write-Step 'Checking for a stale pre-swap player alias'
+    Invoke-LayoutNormalization $localPlayer $backup
+
     Write-Step "Validating the complete $localPlayer-host world before commit"
     Invoke-WorldValidation $localPlayer $script:WorldRoot
-    $backup = New-SafetyBackup 'before-push'
 
     Write-Step 'Checking that GitHub has no newer world'
     try {

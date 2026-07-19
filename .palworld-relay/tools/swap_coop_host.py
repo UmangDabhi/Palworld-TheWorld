@@ -532,6 +532,75 @@ def validate_world(world: Path, host_client_guid: str, client_guid: str) -> tupl
     return host, client
 
 
+def normalize_stale_host_alias(
+    world: Path,
+    host_client_guid: str,
+    client_guid: str,
+    backup: Path,
+) -> None:
+    world = world.resolve()
+    host_client_guid = normalize_guid(host_client_guid)
+    client_guid = normalize_guid(client_guid)
+    players = world / "Players"
+    normal_files = {
+        path.stem.upper(): path
+        for path in players.glob("*.sav")
+        if GUID_RE.fullmatch(path.stem)
+    }
+    expected = {HOST_GUID, client_guid}
+    extras = set(normal_files) - expected
+    if not extras:
+        print("LAYOUT_NORMALIZATION_OK stale_alias=none")
+        return
+    if extras != {host_client_guid}:
+        raise SwapError(
+            f"Cannot safely normalize player layout; unexpected ordinary saves: {sorted(extras)}"
+        )
+
+    host_path = normal_files.get(HOST_GUID)
+    alias_path = normal_files[host_client_guid]
+    if host_path is None or client_guid not in normal_files:
+        raise SwapError("Cannot normalize a stale alias because the host or client save is missing")
+    alias_dps = players / f"{host_client_guid}_dps.sav"
+    if alias_dps.is_file():
+        raise SwapError(
+            f"Refusing to move stale alias {alias_path.name}: matching DPS sidecar "
+            f"{alias_dps.name} needs separate ownership inspection"
+        )
+
+    host_doc, _, _ = load_sav(host_path)
+    alias_doc, _, _ = load_sav(alias_path)
+    if normalize_guid(str(player_struct(host_doc)["PlayerUId"]["value"])) != HOST_GUID:
+        raise SwapError(f"Host file {host_path.name} does not contain the host UID")
+    if normalize_guid(str(player_struct(alias_doc)["PlayerUId"]["value"])) != host_client_guid:
+        raise SwapError(f"Alias file {alias_path.name} does not contain {host_client_guid}")
+    host_instance = player_instance(host_doc)
+    alias_instance = player_instance(alias_doc)
+    if host_instance != alias_instance:
+        raise SwapError(
+            f"Refusing to move {alias_path.name}: its character instance {alias_instance} "
+            f"does not match host instance {host_instance}"
+        )
+
+    backup = backup.resolve()
+    backup_root = (world / ".palworld-relay" / "backups").resolve()
+    try:
+        backup.relative_to(backup_root)
+    except ValueError as exc:
+        raise SwapError(f"Quarantine path is outside relay backups: {backup}") from exc
+    destination_dir = backup / "stale-player-aliases"
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination = destination_dir / alias_path.name
+    if destination.exists():
+        raise SwapError(f"Stale-alias backup already exists: {destination}")
+    os.replace(alias_path, destination)
+    print(
+        "LAYOUT_NORMALIZATION_OK "
+        f"stale_alias={alias_path.name} instance={host_instance} moved_to={destination} "
+        f"restore_to={alias_path}"
+    )
+
+
 def replacement_for(value, destination_guid: str):
     if isinstance(value, UUID):
         return uuid(destination_guid)
@@ -694,9 +763,16 @@ def main() -> int:
     swap_parser.add_argument("world", type=Path)
     swap_parser.add_argument("current_client_guid")
     swap_parser.add_argument("incoming_client_guid")
+    normalize_parser = commands.add_parser(
+        "normalize-layout", help="quarantine a provably stale host client alias"
+    )
+    normalize_parser.add_argument("world", type=Path)
+    normalize_parser.add_argument("host_client_guid")
+    normalize_parser.add_argument("client_guid")
+    normalize_parser.add_argument("backup", type=Path)
     arguments = sys.argv[1:]
     # Older Pull-And-Swap.ps1 versions call the tool without the "swap" verb.
-    if len(arguments) == 3 and arguments[0] not in {"validate", "swap"}:
+    if len(arguments) == 3 and arguments[0] not in {"validate", "swap", "normalize-layout"}:
         arguments.insert(0, "swap")
     args = parser.parse_args(arguments)
     try:
@@ -708,8 +784,15 @@ def main() -> int:
                 f"client_items={client.item_slots} client_pals={client.pals} "
                 f"client_dps_pals={client.dps_pals}"
             )
-        else:
+        elif args.command == "swap":
             swap(args.world, args.current_client_guid, args.incoming_client_guid)
+        else:
+            normalize_stale_host_alias(
+                args.world,
+                args.host_client_guid,
+                args.client_guid,
+                args.backup,
+            )
     except Exception as exc:
         print(f"{args.command.upper()}_ERROR: {exc}", file=sys.stderr)
         return 1
