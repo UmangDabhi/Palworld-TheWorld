@@ -582,9 +582,7 @@ def decode_bytes(
             return {"values": m_bytes}
 
     if not reader.eof():
-        raise Exception(
-            f"Warning: EOF not reached for {object_id} {map_object_concrete_model}: ori: {''.join(f'{b:02x}' for b in m_bytes)} remaining: {reader.size - reader.data.tell()}"
-        )
+        data["extra_trailing_bytes"] = [int(value) for value in reader.read_to_end()]
     return data
 
 
@@ -761,6 +759,9 @@ def encode_bytes(p: Optional[dict[str, Any]]) -> bytes:
             raise Exception(
                 f"Unknown map object concrete model {map_object_concrete_model}"
             )
+
+    if "extra_trailing_bytes" in p:
+        writer.write(bytes(p["extra_trailing_bytes"]))
 
     encoded_bytes = writer.bytes()
     return encoded_bytes
