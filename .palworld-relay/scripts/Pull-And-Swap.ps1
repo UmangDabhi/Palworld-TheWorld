@@ -97,6 +97,7 @@ try {
     Write-Host ''
     Write-Host "READY: $localPlayer is the host. Character, all six inventory/equipment containers, dynamic items, party, Palbox, dimensional Pal storage sidecars, Pal ownership/provenance, guild links, player-file layout, and this PC's map data all passed validation." -ForegroundColor Green
     Write-Host 'You may now open Palworld and load this world.' -ForegroundColor Green
+    Write-Host 'Git status will be dirty after a host swap: the old client save becomes the host save and the old host becomes a client save. This is expected; after playing, close Palworld and run 2-PUSH-WORLD.bat.' -ForegroundColor Yellow
     if ($script:LastStashName) {
         Write-Host "The earlier local changes remain safely stored as: $script:LastStashName" -ForegroundColor Yellow
     }

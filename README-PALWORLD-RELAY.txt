@@ -37,6 +37,12 @@ Normal use
 5. The host closes Palworld completely and runs 2-PUSH-WORLD.bat.
 6. The client does not push their own local world after joining someone else.
 
+After a successful host swap, git status is intentionally dirty. Level.sav,
+state.json, and the host player save change; the incoming host's old client
+file is removed, and the outgoing host's client file is added. Matching
+_dps.sav sidecars rotate the same way. Do not restore these paths. Play, close
+Palworld, then use 2-PUSH-WORLD.bat to commit the prepared host layout.
+
 The BAT files and every script/tool they need are committed to this repository.
 Each successful pull updates them for the next run.
 
