@@ -46,6 +46,22 @@ Normal use
 5. The host closes Palworld completely and runs 2-PUSH-WORLD.bat.
 6. The client does not push their own local world after joining someone else.
 
+Diagnostics
+-----------
+
+With Palworld closed, run 3-DIAGNOSE-WORLD.bat whenever a player appears fresh,
+a player model is missing, pull/push stops, or the Players folder has an
+unexpected file. It is read-only except for its timestamped support log.
+
+The report includes the active and expected Steam account, configured/current
+host, Git commit and status, stashes, save hashes, every ordinary player and _dps
+sidecar, internal UIDs and character instances, duplicate host aliases,
+character levels, item/Pal counts when ownership links validate, the expected
+file layout, recent backups, and recent relay logs. Share the newest
+.palworld-relay\logs\*-diagnose-world.log instead of assembling one-off
+commands. A warning diagnoses the current state; it never normalizes, swaps,
+restores, stages, commits, or deletes a save.
+
 After a successful host swap, git status is intentionally dirty. Level.sav,
 state.json, and the host player save change; the incoming host's old client
 file is removed, and the outgoing host's client file is added. Matching

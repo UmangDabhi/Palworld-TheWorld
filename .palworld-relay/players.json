@@ -1,10 +1,14 @@
 ﻿{
     "Shine":  {
                   "characterName":  "Shine",
-                  "clientGuid":  "B876A457000000000000000000000000"
+                  "clientGuid":  "B876A457000000000000000000000000",
+                  "steamId64":  "76561199293044696",
+                  "steamActiveUser":  "0x4F7097D8"
               },
     "Hazeki":  {
                    "characterName":  "Hazeki",
-                   "clientGuid":  "7A63391C000000000000000000000000"
+                   "clientGuid":  "7A63391C000000000000000000000000",
+                   "steamId64":  "76561199058603447",
+                   "steamActiveUser":  "0x41774DB7"
                }
 }
