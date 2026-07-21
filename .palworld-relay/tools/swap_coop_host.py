@@ -644,6 +644,49 @@ def rewrite_guid_references(value, mapping: dict[str, str]) -> int:
     return rewrites
 
 
+def neutralize_dormant_host_guild_aliases(level: dict, stale_guid: str) -> int:
+    stale_guid = normalize_guid(stale_guid)
+    neutralized = 0
+    for group in keyed_entries(level, "GroupSaveDataMap"):
+        try:
+            if group["value"]["GroupType"]["value"]["value"] != "EPalGroupType::Guild":
+                continue
+            raw = group["value"]["RawData"]["value"]
+        except KeyError:
+            continue
+
+        stale_players = [
+            player
+            for player in raw.get("players", [])
+            if normalize_guid(str(player.get("player_uid"))) == stale_guid
+        ]
+        if not stale_players:
+            continue
+
+        players = raw.get("players", [])
+        admin = normalize_guid(str(raw.get("admin_player_uid", ZERO_GUID)))
+        has_assets = any(
+            raw.get(name)
+            for name in (
+                "individual_character_handle_ids",
+                "base_ids",
+                "map_object_instance_ids_base_camp_points",
+                "guild_markers",
+            )
+        )
+        if has_assets or len(stale_players) != len(players) or admin != stale_guid:
+            raise SwapError(
+                f"Dormant host alias {stale_guid} also appears in a non-empty or shared guild. "
+                "Refusing to guess which guild data belongs to a real player."
+            )
+
+        raw["players"] = []
+        raw["admin_player_uid"] = uuid(ZERO_GUID)
+        raw["group_name"] = normalize_guid(str(raw["group_id"]))
+        neutralized += 1
+    return neutralized
+
+
 def write_validated(path: Path, data: bytes) -> None:
     path.write_bytes(data)
     load_sav(path)
@@ -669,6 +712,9 @@ def swap(world: Path, current_client_guid: str, incoming_client_guid: str) -> No
     incoming_doc, incoming_type, incoming_zlib = load_sav(incoming_path)
     host_dps = load_sav(host_dps_path) if host_dps_path.is_file() else None
     incoming_dps = load_sav(incoming_dps_path) if incoming_dps_path.is_file() else None
+    neutralized_guilds = neutralize_dormant_host_guild_aliases(
+        level, current_client_guid
+    )
     mapping = {HOST_GUID: current_client_guid, incoming_client_guid: HOST_GUID}
     rewrites = rewrite_guid_references(level, mapping)
     rewrites += rewrite_guid_references(host_doc, mapping)
@@ -745,6 +791,7 @@ def swap(world: Path, current_client_guid: str, incoming_client_guid: str) -> No
     print(
         f"SWAP_OK old_host={current_client_guid} new_host={incoming_client_guid} "
         f"guid_references={rewrites} "
+        f"dormant_guild_aliases_neutralized={neutralized_guilds} "
         f"old_host_items={after_client.item_slots} old_host_pals={after_client.pals} "
         f"new_host_items={after_host.item_slots} new_host_pals={after_host.pals} "
         f"old_host_dps_pals={after_client.dps_pals} new_host_dps_pals={after_host.dps_pals} "

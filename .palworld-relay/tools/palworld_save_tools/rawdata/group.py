@@ -19,6 +19,76 @@ def player_info_writer(writer: FArchiveWriter, p: dict[str, Any]) -> None:
     writer.fstring(p["player_info"]["player_name"])
 
 
+def guild_player_info_reader(reader: FArchiveReader) -> dict[str, Any]:
+    player = player_info_reader(reader)
+    player["role"] = reader.byte()
+    return player
+
+
+def guild_player_info_writer(writer: FArchiveWriter, p: dict[str, Any]) -> None:
+    player_info_writer(writer, p)
+    writer.byte(p["role"])
+
+
+def guild_marker_reader(reader: FArchiveReader) -> dict[str, Any]:
+    return {
+        "marker_id": reader.guid(),
+        "icon_location": reader.vector_dict(),
+        "icon_type": reader.i32(),
+        "owner_player_uid": reader.guid(),
+    }
+
+
+def guild_marker_writer(writer: FArchiveWriter, p: dict[str, Any]) -> None:
+    writer.guid(p["marker_id"])
+    writer.vector_dict(p["icon_location"])
+    writer.i32(p["icon_type"])
+    writer.guid(p["owner_player_uid"])
+
+
+def role_permission_reader(reader: FArchiveReader) -> dict[str, Any]:
+    return {
+        "role": reader.byte(),
+        "permissions": reader.tarray(lambda r: r.byte()),
+    }
+
+
+def role_permission_writer(writer: FArchiveWriter, p: dict[str, Any]) -> None:
+    writer.byte(p["role"])
+    writer.tarray(lambda w, value: w.byte(value), p["permissions"])
+
+
+def read_guild_tail_v2(reader: FArchiveReader) -> dict[str, Any]:
+    return {
+        "guild_chest_allowed_roles": reader.tarray(lambda r: r.byte()),
+        "unknown_i32": reader.i32(),
+        "admin_player_uid": reader.guid(),
+        "players": reader.tarray(guild_player_info_reader),
+        "role_permissions": reader.tarray(role_permission_reader),
+        "trailing_bytes": reader.byte_list(4),
+    }
+
+
+def read_guild_tail_v1(reader: FArchiveReader) -> dict[str, Any]:
+    return {
+        "admin_player_uid": reader.guid(),
+        "players": reader.tarray(player_info_reader),
+        "trailing_bytes": reader.byte_list(4),
+    }
+
+
+def read_guild_tail(reader: FArchiveReader) -> dict[str, Any]:
+    start = reader.data.tell()
+    try:
+        tail = read_guild_tail_v2(reader)
+        if reader.eof():
+            return tail
+    except Exception:
+        pass
+    reader.data.seek(start)
+    return read_guild_tail_v1(reader)
+
+
 def decode(
     reader: FArchiveReader, type_name: str, size: int, path: str
 ) -> dict[str, Any]:
@@ -64,11 +134,10 @@ def decode_bytes(
             "map_object_instance_ids_base_camp_points": reader.tarray(uuid_reader),
             "guild_name": reader.fstring(),
             "last_guild_name_modifier_player_uid": reader.guid(),
-            "unknown_2": reader.byte_list(20),
-            "players": reader.tarray(player_info_reader),
-            "trailing_bytes": reader.byte_list(4),
+            "guild_markers": reader.tarray(guild_marker_reader),
         }
         group_data |= guild
+        group_data |= read_guild_tail(reader)
     if group_type == "EPalGroupType::IndependentGuild":
         guild: dict[str, Any] = {
             "base_camp_level": reader.i32(),
@@ -132,8 +201,16 @@ def encode_bytes(p: dict[str, Any]) -> bytes:
         writer.tarray(uuid_writer, p["map_object_instance_ids_base_camp_points"])
         writer.fstring(p["guild_name"])
         writer.guid(p["last_guild_name_modifier_player_uid"])
-        writer.write(bytes(p["unknown_2"]))
-        writer.tarray(player_info_writer, p["players"])
+        writer.tarray(guild_marker_writer, p["guild_markers"])
+        if "role_permissions" in p:
+            writer.tarray(lambda w, value: w.byte(value), p["guild_chest_allowed_roles"])
+            writer.i32(p["unknown_i32"])
+            writer.guid(p["admin_player_uid"])
+            writer.tarray(guild_player_info_writer, p["players"])
+            writer.tarray(role_permission_writer, p["role_permissions"])
+        else:
+            writer.guid(p["admin_player_uid"])
+            writer.tarray(player_info_writer, p["players"])
         writer.write(bytes(p["trailing_bytes"]))
     if "extra_trailing_bytes" in p:
         writer.write(bytes(p["extra_trailing_bytes"]))

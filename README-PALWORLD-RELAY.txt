@@ -42,7 +42,7 @@ Normal use
 1. Decide who will host. Make sure Palworld is fully closed on that PC.
 2. The host runs 1-PULL-AND-SWAP.bat.
 3. Only open Palworld after the BAT prints READY and says validation passed.
-4. Both players play in that hosted session.
+4. When Shine hosts, Hazeki may join. When Hazeki hosts, Shine stays out.
 5. The host closes Palworld completely and runs 2-PUSH-WORLD.bat.
 6. The client does not push their own local world after joining someone else.
 
@@ -55,9 +55,10 @@ unexpected file. It is read-only except for its timestamped support log.
 
 The report includes the active and expected Steam account, configured/current
 host, Git commit and status, stashes, save hashes, every ordinary player and _dps
-sidecar, internal UIDs and character instances, duplicate host aliases,
-character levels, item/Pal counts when ownership links validate, the expected
-file layout, recent backups, and recent relay logs. Share the newest
+sidecar, internal UIDs and character instances, guild members, guild map-marker
+owners, duplicate/dormant host aliases, character levels, item/Pal counts when
+ownership links validate, the expected file layout, recent backups, and recent
+relay logs. Share the newest
 .palworld-relay\logs\*-diagnose-world.log instead of assembling one-off
 commands. A warning diagnoses the current state; it never normalizes, swaps,
 restores, stages, commits, or deletes a save.
@@ -101,6 +102,11 @@ Safety and validation
   two-player file layout.
 - Swap compares exact inventory/equipment fingerprints and exact Pal instance
   sets before and after rotation. Matching counts alone are not accepted.
+- Guild parsing supports both the older layout and the July 2026 layout with
+  map markers, marker owners, chest roles, player roles, and role permissions.
+  A dormant outgoing-host alias is neutralized only when its guild has no
+  handles, bases, base points, markers, or other members; ambiguous guild data
+  stops the swap instead.
 - Files named Players\<player-guid>_dps.sav are dimensional Pal storage
   sidecars, not extra players. They are backed up, committed, validated, and
   rotated with their owner; exact sidecar fingerprints must survive the swap.

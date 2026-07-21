@@ -73,6 +73,59 @@ def diagnose(world: Path, host_client_guid: str, client_guid: str) -> None:
         f"FILE_COUNTS ordinary={len(normal_paths)} dps_sidecars={len(dps_paths)}"
     )
 
+    guild_memberships: dict[str, list[str]] = {}
+    for group in keyed_entries(level_document, "GroupSaveDataMap"):
+        try:
+            if group["value"]["GroupType"]["value"]["value"] != "EPalGroupType::Guild":
+                continue
+            raw = group["value"]["RawData"]["value"]
+            group_id = normalize_guid(str(raw["group_id"]))
+            members = [
+                normalize_guid(str(player["player_uid"]))
+                for player in raw.get("players", [])
+            ]
+            for member in members:
+                guild_memberships.setdefault(member, []).append(group_id)
+            marker_owners = sorted(
+                {
+                    normalize_guid(str(marker["owner_player_uid"]))
+                    for marker in raw.get("guild_markers", [])
+                }
+            )
+            has_assets = any(
+                raw.get(name)
+                for name in (
+                    "individual_character_handle_ids",
+                    "base_ids",
+                    "map_object_instance_ids_base_camp_points",
+                    "guild_markers",
+                )
+            )
+            dormant_alias = (
+                host_client_guid in members
+                and not has_assets
+                and all(member == host_client_guid for member in members)
+            )
+            print(
+                f"GUILD id={group_id} name={raw.get('guild_name')!r} "
+                f"admin={normalize_guid(str(raw.get('admin_player_uid')))} "
+                f"members={','.join(members) or 'none'} "
+                f"handles={len(raw.get('individual_character_handle_ids', []))} "
+                f"bases={len(raw.get('base_ids', []))} "
+                f"markers={len(raw.get('guild_markers', []))} "
+                f"marker_owners={','.join(marker_owners) or 'none'} "
+                f"dormant_host_alias={str(dormant_alias).lower()}"
+            )
+        except Exception as exc:
+            print(f"GUILD_ERROR key={group.get('key')} error={exc}")
+
+    for player_guid, group_ids in sorted(guild_memberships.items()):
+        if len(group_ids) > 1:
+            print(
+                f"DUPLICATE_GUILD_MEMBERSHIP player={player_guid} "
+                f"guilds={','.join(group_ids)}"
+            )
+
     documents: dict[str, dict] = {}
     instances: dict[str, list[str]] = {}
     for path in normal_paths:
