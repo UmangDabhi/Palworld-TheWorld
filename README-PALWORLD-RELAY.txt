@@ -114,6 +114,10 @@ Safety and validation
   UID as provenance. Current ownership is validated from OwnerPlayerUId and the
   player's party/Palbox placement, while slot/key provenance must remain
   internally consistent.
+- Completed Pal expeditions can leave stale per-Pal assignment flags after a
+  host swap. Pull and push now clear only flags whose Pal instance is absent
+  from the expedition station's active team; active expeditions remain locked.
+  The diagnostic report shows active and orphaned expedition-lock counts.
 - Backups are in .palworld-relay\backups. Each new backup has a manifest with
   SHA-256 hashes and the Git commit ID.
 - Logs are in .palworld-relay\logs.

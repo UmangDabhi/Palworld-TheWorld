@@ -14,6 +14,7 @@ from swap_coop_host import (
     dps_summary,
     entry_instance,
     entry_player_guid,
+    expedition_lock_status,
     is_player_entry,
     keyed_entries,
     load_sav,
@@ -71,6 +72,21 @@ def diagnose(world: Path, host_client_guid: str, client_guid: str) -> None:
     )
     print(
         f"FILE_COUNTS ordinary={len(normal_paths)} dps_sidecars={len(dps_paths)}"
+    )
+    active_expedition_locks, orphaned_expedition_locks = expedition_lock_status(
+        level_document
+    )
+    active_stations = sorted(
+        {station_id for _, _, station_id, _ in active_expedition_locks}
+    )
+    orphaned_stations = sorted(
+        {station_id for _, _, station_id, _ in orphaned_expedition_locks}
+    )
+    print(
+        f"EXPEDITION_LOCKS active={len(active_expedition_locks)} "
+        f"orphaned={len(orphaned_expedition_locks)} "
+        f"active_stations={','.join(active_stations) or 'none'} "
+        f"orphaned_stations={','.join(orphaned_stations) or 'none'}"
     )
 
     guild_memberships: dict[str, list[str]] = {}

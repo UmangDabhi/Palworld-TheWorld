@@ -53,6 +53,8 @@ try {
     if ($remoteHost -notin @('Shine', 'Hazeki')) {
         throw "GitHub state.json has an invalid currentHost: $remoteHost"
     }
+    Write-Step 'Checking the staged world for completed Pal expedition locks'
+    Invoke-ExpeditionRepair $remoteHost $stage
     Invoke-WorldValidation $remoteHost $stage
 
     if ($remoteHost -ne $localPlayer) {

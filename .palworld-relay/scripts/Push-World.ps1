@@ -21,6 +21,9 @@ try {
     Write-Step 'Checking for a stale pre-swap player alias'
     Invoke-LayoutNormalization $localPlayer $backup
 
+    Write-Step 'Repairing completed Pal expedition locks'
+    Invoke-ExpeditionRepair $localPlayer $script:WorldRoot
+
     Write-Step "Validating the complete $localPlayer-host world before commit"
     Invoke-WorldValidation $localPlayer $script:WorldRoot
 

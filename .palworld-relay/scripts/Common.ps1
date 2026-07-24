@@ -304,6 +304,11 @@ function Invoke-WorldValidation([string]$HostPlayer, [string]$Root = $script:Wor
     Invoke-SaveTool validate $Root $mapping.HostClientGuid $mapping.ClientGuid
 }
 
+function Invoke-ExpeditionRepair([string]$HostPlayer, [string]$Root = $script:WorldRoot) {
+    $mapping = Get-HostMapping $HostPlayer
+    Invoke-SaveTool repair-expedition-locks $Root $mapping.HostClientGuid $mapping.ClientGuid
+}
+
 function Invoke-CharacterSwap([string]$CurrentHost, [string]$IncomingHost, [string]$Root) {
     $current = Get-HostMapping $CurrentHost
     $incoming = Get-HostMapping $IncomingHost

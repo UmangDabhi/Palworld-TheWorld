@@ -23,6 +23,8 @@ HOST_GUID = "00000000000000000000000000000001"
 ZERO_GUID = "00000000000000000000000000000000"
 GUID_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 REQUIRED_WORLD_PATHS = ("Level.sav", "LevelMeta.sav", "WorldOption.sav", "LocalData.sav", "Players")
+EXPEDITION_ASSIGNMENT_FIELD = "MapObjectConcreteInstanceIdAssignedToExpedition"
+EXPEDITION_MODEL_TYPE = "PalMapObjectCharacterTeamMissionModel"
 
 
 class SwapError(RuntimeError):
@@ -227,6 +229,62 @@ def save_parameter(entry: dict) -> dict:
 
 def is_player_entry(entry: dict) -> bool:
     return bool(save_parameter(entry).get("IsPlayer", {}).get("value", False))
+
+
+def map_object_entries(level: dict) -> list:
+    try:
+        value = world_data(level)["MapObjectSaveData"]["value"]
+    except KeyError as exc:
+        raise SwapError(f"Level.sav is missing MapObjectSaveData: {exc}") from exc
+    entries = value.get("values") if isinstance(value, dict) else value
+    if not isinstance(entries, list):
+        raise SwapError("Level.sav MapObjectSaveData is not a list")
+    return entries
+
+
+def expedition_lock_status(level: dict) -> tuple[list[tuple], list[tuple]]:
+    station_payloads: dict[str, bytes] = {}
+    known_stations: set[str] = set()
+    for entry in map_object_entries(level):
+        raw = (
+            entry.get("ConcreteModel", {})
+            .get("value", {})
+            .get("RawData", {})
+            .get("value", {})
+        )
+        if raw.get("concrete_model_type") != EXPEDITION_MODEL_TYPE:
+            continue
+        station_id = str(raw.get("instance_id", "")).lower()
+        if not station_id:
+            continue
+        known_stations.add(station_id)
+        unknown_bytes = raw.get("unknown_bytes")
+        if isinstance(unknown_bytes, (list, tuple)):
+            station_payloads[station_id] = bytes(unknown_bytes)
+
+    assigned: list[tuple] = []
+    orphaned: list[tuple] = []
+    for entry in keyed_entries(level, "CharacterSaveParameterMap"):
+        parameter = save_parameter(entry)
+        assignment = parameter.get(EXPEDITION_ASSIGNMENT_FIELD)
+        if not assignment:
+            continue
+        if is_player_entry(entry):
+            raise SwapError("A player character unexpectedly has an expedition assignment")
+        station_id = str(assignment.get("value", "")).lower()
+        instance_id = entry_instance(entry)
+        if station_id in known_stations and station_id not in station_payloads:
+            raise SwapError(
+                f"Expedition station {station_id} uses an unsupported save layout; "
+                "no automatic lock repair was attempted"
+            )
+        payload = station_payloads.get(station_id)
+        lock = (entry, parameter, station_id, instance_id)
+        if payload is not None and UUID.from_str(instance_id).raw_bytes in payload:
+            assigned.append(lock)
+        else:
+            orphaned.append(lock)
+    return assigned, orphaned
 
 
 def index_unique(entries: list, key_func, label: str) -> dict[str, dict]:
@@ -692,6 +750,60 @@ def write_validated(path: Path, data: bytes) -> None:
     load_sav(path)
 
 
+def repair_expedition_locks(
+    world: Path,
+    host_client_guid: str,
+    client_guid: str,
+) -> None:
+    world = world.resolve()
+    host_client_guid = normalize_guid(host_client_guid)
+    client_guid = normalize_guid(client_guid)
+    before_host, before_client = validate_world(world, host_client_guid, client_guid)
+    level_path = world / "Level.sav"
+    original_bytes = level_path.read_bytes()
+    level, save_type, use_zlib = load_sav(level_path)
+    assigned, orphaned = expedition_lock_status(level)
+    if not orphaned:
+        print(
+            f"EXPEDITION_REPAIR_OK unlocked=0 active={len(assigned)} "
+            "reason=no-orphaned-locks"
+        )
+        return
+
+    station_ids = sorted({station_id for _, _, station_id, _ in orphaned})
+    for _, parameter, _, _ in orphaned:
+        del parameter[EXPEDITION_ASSIGNMENT_FIELD]
+    expected_fingerprint = document_fingerprint(level, {})
+    level_tmp = world / ".Level.sav.expedition-repair.tmp"
+    installed = False
+    try:
+        write_validated(level_tmp, encode_sav(level, save_type, use_zlib))
+        staged_level, _, _ = load_sav(level_tmp)
+        if document_fingerprint(staged_level, {}) != expected_fingerprint:
+            raise SwapError("Expedition repair did not round-trip exactly")
+        staged_assigned, staged_orphaned = expedition_lock_status(staged_level)
+        if staged_orphaned or len(staged_assigned) != len(assigned):
+            raise SwapError("Expedition lock counts changed unexpectedly while staging repair")
+
+        os.replace(level_tmp, level_path)
+        installed = True
+        after_host, after_client = validate_world(world, host_client_guid, client_guid)
+        if before_host != after_host or before_client != after_client:
+            raise SwapError("Player inventory, equipment, or Pal ownership changed during repair")
+    except Exception:
+        if installed:
+            level_path.write_bytes(original_bytes)
+            validate_world(world, host_client_guid, client_guid)
+        raise
+    finally:
+        level_tmp.unlink(missing_ok=True)
+
+    print(
+        f"EXPEDITION_REPAIR_OK unlocked={len(orphaned)} active={len(assigned)} "
+        f"stations={','.join(station_ids)} player_data_exact=true"
+    )
+
+
 def swap(world: Path, current_client_guid: str, incoming_client_guid: str) -> None:
     world = world.resolve()
     current_client_guid = normalize_guid(current_client_guid)
@@ -817,9 +929,21 @@ def main() -> int:
     normalize_parser.add_argument("host_client_guid")
     normalize_parser.add_argument("client_guid")
     normalize_parser.add_argument("backup", type=Path)
+    expedition_parser = commands.add_parser(
+        "repair-expedition-locks",
+        help="clear only Pal expedition locks absent from the station's active team",
+    )
+    expedition_parser.add_argument("world", type=Path)
+    expedition_parser.add_argument("host_client_guid")
+    expedition_parser.add_argument("client_guid")
     arguments = sys.argv[1:]
     # Older Pull-And-Swap.ps1 versions call the tool without the "swap" verb.
-    if len(arguments) == 3 and arguments[0] not in {"validate", "swap", "normalize-layout"}:
+    if len(arguments) == 3 and arguments[0] not in {
+        "validate",
+        "swap",
+        "normalize-layout",
+        "repair-expedition-locks",
+    }:
         arguments.insert(0, "swap")
     args = parser.parse_args(arguments)
     try:
@@ -833,12 +957,18 @@ def main() -> int:
             )
         elif args.command == "swap":
             swap(args.world, args.current_client_guid, args.incoming_client_guid)
-        else:
+        elif args.command == "normalize-layout":
             normalize_stale_host_alias(
                 args.world,
                 args.host_client_guid,
                 args.client_guid,
                 args.backup,
+            )
+        else:
+            repair_expedition_locks(
+                args.world,
+                args.host_client_guid,
+                args.client_guid,
             )
     except Exception as exc:
         print(f"{args.command.upper()}_ERROR: {exc}", file=sys.stderr)
