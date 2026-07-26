@@ -153,9 +153,7 @@ def decode_work_assign_bytes(
     }
     data["state"] = reader.byte()
     data["fixed"] = reader.u32() > 0
-    data["trailing_bytes"] = reader.byte_list(4)
-    if not reader.eof():
-        raise Exception("Warning: EOF not reached")
+    data["trailing_bytes"] = list(reader.read_to_end())
 
     return data
 
