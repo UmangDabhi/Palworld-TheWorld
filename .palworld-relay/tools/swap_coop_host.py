@@ -754,6 +754,7 @@ def repair_expedition_locks(
     world: Path,
     host_client_guid: str,
     client_guid: str,
+    require_inactive: bool = False,
 ) -> None:
     world = world.resolve()
     host_client_guid = normalize_guid(host_client_guid)
@@ -763,6 +764,14 @@ def repair_expedition_locks(
     original_bytes = level_path.read_bytes()
     level, save_type, use_zlib = load_sav(level_path)
     assigned, orphaned = expedition_lock_status(level)
+    if require_inactive and assigned:
+        station_ids = sorted({station_id for _, _, station_id, _ in assigned})
+        raise SwapError(
+            f"Active Pal expedition detected: {len(assigned)} Pals at station(s) "
+            f"{','.join(station_ids)}. Finish and claim every expedition on the "
+            "current host, close Palworld, then retry. Active expeditions cannot "
+            "be transferred safely between co-op hosts. No save was changed."
+        )
     if not orphaned:
         print(
             f"EXPEDITION_REPAIR_OK unlocked=0 active={len(assigned)} "
@@ -936,6 +945,7 @@ def main() -> int:
     expedition_parser.add_argument("world", type=Path)
     expedition_parser.add_argument("host_client_guid")
     expedition_parser.add_argument("client_guid")
+    expedition_parser.add_argument("--require-inactive", action="store_true")
     arguments = sys.argv[1:]
     # Older Pull-And-Swap.ps1 versions call the tool without the "swap" verb.
     if len(arguments) == 3 and arguments[0] not in {
@@ -969,6 +979,7 @@ def main() -> int:
                 args.world,
                 args.host_client_guid,
                 args.client_guid,
+                args.require_inactive,
             )
     except Exception as exc:
         print(f"{args.command.upper()}_ERROR: {exc}", file=sys.stderr)
