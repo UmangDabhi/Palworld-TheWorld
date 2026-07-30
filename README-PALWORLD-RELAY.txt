@@ -119,6 +119,9 @@ Safety and validation
   expedition station's active team. They stop if an expedition is still active:
   finish and claim it on the current host before transferring the world.
   The diagnostic report shows active and orphaned expedition-lock counts.
+- Palworld 1.0 World Tree recovery-party records use 64-bit map values. The
+  bundled parser preserves those records and rewrites their player GUID keys
+  during host swaps; unknown new map-object payloads remain byte-exact.
 - Backups are in .palworld-relay\backups. Each new backup has a manifest with
   SHA-256 hashes and the Git commit ID.
 - Logs are in .palworld-relay\logs.

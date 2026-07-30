@@ -538,11 +538,21 @@ class FArchiveReader:
             return self.fstring()
         elif type_name == "IntProperty":
             return self.i32()
-        elif type_name == "BoolProperty":
-            return self.bool()
+        elif type_name == "UInt16Property":
+            return self.u16()
         elif type_name == "UInt32Property":
             return self.u32()
-        elif type_name == "StrProperty":
+        elif type_name == "UInt64Property":
+            return self.u64()
+        elif type_name == "Int64Property":
+            return self.i64()
+        elif type_name == "FixedPoint64Property":
+            return self.i32()
+        elif type_name == "FloatProperty":
+            return self.float()
+        elif type_name == "BoolProperty":
+            return self.bool()
+        elif type_name in ("NameProperty", "StrProperty"):
             return self.fstring()
         else:
             raise Exception(f"Unknown property value type: {type_name} ({path})")
@@ -1002,11 +1012,21 @@ class FArchiveWriter:
             self.fstring(value)
         elif type_name == "IntProperty":
             self.i32(value)
-        elif type_name == "BoolProperty":
-            self.bool(value)
+        elif type_name == "UInt16Property":
+            self.u16(value)
         elif type_name == "UInt32Property":
             self.u32(value)
-        elif type_name == "StrProperty":
+        elif type_name == "UInt64Property":
+            self.u64(value)
+        elif type_name == "Int64Property":
+            self.i64(value)
+        elif type_name == "FixedPoint64Property":
+            self.i32(value)
+        elif type_name == "FloatProperty":
+            self.float(value)
+        elif type_name == "BoolProperty":
+            self.bool(value)
+        elif type_name in ("NameProperty", "StrProperty"):
             self.fstring(value)
         else:
             raise Exception(f"Unknown property value type: {type_name}")
