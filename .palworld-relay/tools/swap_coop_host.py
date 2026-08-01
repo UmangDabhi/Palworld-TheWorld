@@ -79,7 +79,7 @@ def document_fingerprint(document: dict, identity_roles: dict[str, str]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
-def dps_summary(path: Path, player_guid: str, other_guid: str) -> tuple[int, str] | None:
+def load_dps(path: Path) -> tuple[dict, set[str]] | None:
     if not path.is_file():
         return None
     document, _, _ = load_sav(path)
@@ -102,6 +102,14 @@ def dps_summary(path: Path, player_guid: str, other_guid: str) -> tuple[int, str
         if instance in active_instances:
             raise SwapError(f"Duplicate dimensional Pal instance {instance} in {path.name}")
         active_instances.add(instance)
+    return document, active_instances
+
+
+def dps_summary(path: Path, player_guid: str, other_guid: str) -> tuple[int, str] | None:
+    loaded = load_dps(path)
+    if loaded is None:
+        return None
+    document, active_instances = loaded
     return len(active_instances), document_fingerprint(
         document,
         {player_guid: "SELF", other_guid: "OTHER"},
@@ -620,10 +628,29 @@ def normalize_stale_host_alias(
     if host_path is None or client_guid not in normal_files:
         raise SwapError("Cannot normalize a stale alias because the host or client save is missing")
     alias_dps = players / f"{host_client_guid}_dps.sav"
-    if alias_dps.is_file():
-        raise SwapError(
-            f"Refusing to move stale alias {alias_path.name}: matching DPS sidecar "
-            f"{alias_dps.name} needs separate ownership inspection"
+    host_dps = players / f"{HOST_GUID}_dps.sav"
+    has_alias_dps = alias_dps.is_file()
+    dps_instance_relation = "none"
+    alias_dps_count = 0
+    host_dps_count = 0
+    if has_alias_dps:
+        alias_dps_loaded = load_dps(alias_dps)
+        host_dps_loaded = load_dps(host_dps)
+        assert alias_dps_loaded is not None
+        alias_dps_instances = alias_dps_loaded[1]
+        host_dps_instances = host_dps_loaded[1] if host_dps_loaded is not None else set()
+        alias_dps_count = len(alias_dps_instances)
+        host_dps_count = len(host_dps_instances)
+        unique_alias_pals = alias_dps_instances - host_dps_instances
+        if unique_alias_pals:
+            sample = ", ".join(sorted(unique_alias_pals)[:5])
+            raise SwapError(
+                f"Refusing to move stale DPS alias {alias_dps.name}: it contains "
+                f"{len(unique_alias_pals)} Pal instance(s) not present in {host_dps.name} "
+                f"({sample}). Both files remain live and are also preserved in the safety backup."
+            )
+        dps_instance_relation = (
+            "exact" if alias_dps_instances == host_dps_instances else "subset"
         )
 
     host_doc, _, _ = load_sav(host_path)
@@ -648,14 +675,31 @@ def normalize_stale_host_alias(
         raise SwapError(f"Quarantine path is outside relay backups: {backup}") from exc
     destination_dir = backup / "stale-player-aliases"
     destination_dir.mkdir(parents=True, exist_ok=True)
-    destination = destination_dir / alias_path.name
-    if destination.exists():
-        raise SwapError(f"Stale-alias backup already exists: {destination}")
-    os.replace(alias_path, destination)
+    moves = [(alias_path, destination_dir / alias_path.name)]
+    if has_alias_dps:
+        moves.append((alias_dps, destination_dir / alias_dps.name))
+    for _, destination in moves:
+        if destination.exists():
+            raise SwapError(f"Stale-alias backup already exists: {destination}")
+
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for source, destination in moves:
+            os.replace(source, destination)
+            moved.append((source, destination))
+    except OSError as exc:
+        for source, destination in reversed(moved):
+            if destination.exists() and not source.exists():
+                os.replace(destination, source)
+        raise SwapError(f"Could not quarantine the complete stale alias set: {exc}") from exc
+
     print(
         "LAYOUT_NORMALIZATION_OK "
-        f"stale_alias={alias_path.name} instance={host_instance} moved_to={destination} "
-        f"restore_to={alias_path}"
+        f"stale_alias={alias_path.name} instance={host_instance} "
+        f"stale_dps_alias={alias_dps.name if has_alias_dps else 'none'} "
+        f"alias_dps_pals={alias_dps_count} host_dps_pals={host_dps_count} "
+        f"dps_instance_relation={dps_instance_relation} "
+        f"moved_to={destination_dir} restore_to={players}"
     )
 
 

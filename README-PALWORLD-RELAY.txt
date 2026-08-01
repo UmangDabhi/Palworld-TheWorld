@@ -32,9 +32,11 @@ Agreed session policy:
   7A63391C000000000000000000000000.sav.
 - When Hazeki hosts, Shine does not join; Shine remains preserved in
   B876A457000000000000000000000000.sav.
-- A leftover 7A...sav while Hazeki is host is accepted only when it is proven
-  to be the same character instance as the host save. Before push, the relay
-  moves that stale alias into the new safety backup instead of deleting it.
+- A leftover client-GUID save for the current host is accepted only when it is
+  proven to be the same character instance as the host save. If it has a DPS
+  sidecar, every active Pal instance must already exist in the active host DPS
+  sidecar. The relay moves the complete stale alias set into the new safety
+  backup instead of deleting it; any unique alias Pal stops the operation.
 
 Normal use
 ----------
